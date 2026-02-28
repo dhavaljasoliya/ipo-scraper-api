@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def home():
     return jsonify({
         "status": "running",
-        "message": "StockBharat IPO Scraper API",
+        "message": "IPO Scraper API",
         "endpoints": {
             "/api/ipos": "Get all IPOs (current + upcoming)",
             "/api/ipos/current": "Get only current/open IPOs",
@@ -27,10 +27,10 @@ def home():
 
 @app.route('/api/ipos')
 def get_all_ipos():
-    """Get all IPOs from Chittorgarh"""
+    """Get all IPOs from multiple sources"""
     try:
-        current = scrape_chittorgarh_current()
-        upcoming = scrape_chittorgarh_upcoming()
+        current = scrape_all_current()
+        upcoming = scrape_all_upcoming()
         
         return jsonify({
             "success": True,
@@ -52,7 +52,7 @@ def get_all_ipos():
 def get_current_ipos():
     """Get only current/open IPOs"""
     try:
-        ipos = scrape_chittorgarh_current()
+        ipos = scrape_all_current()
         return jsonify({
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -70,7 +70,7 @@ def get_current_ipos():
 def get_upcoming_ipos():
     """Get only upcoming IPOs"""
     try:
-        ipos = scrape_chittorgarh_upcoming()
+        ipos = scrape_all_upcoming()
         return jsonify({
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -91,10 +91,82 @@ def get_session():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://www.chittorgarh.com/'
     })
     return session
 
+def scrape_all_current():
+    """Scrape current IPOs from all available sources"""
+    ipos = []
+    
+    # Try Chittorgarh first
+    try:
+        logger.info("Trying Chittorgarh for current IPOs...")
+        ipos = scrape_chittorgarh_current()
+        if ipos:
+            logger.info(f"Got {len(ipos)} current IPOs from Chittorgarh")
+            return ipos
+    except Exception as e:
+        logger.warning(f"Chittorgarh failed: {e}")
+    
+    # Try Moneycontrol as fallback
+    try:
+        logger.info("Trying Moneycontrol for current IPOs...")
+        ipos = scrape_moneycontrol_current()
+        if ipos:
+            logger.info(f"Got {len(ipos)} current IPOs from Moneycontrol")
+            return ipos
+    except Exception as e:
+        logger.warning(f"Moneycontrol failed: {e}")
+    
+    # Try BSE India as final fallback
+    try:
+        logger.info("Trying BSE India for current IPOs...")
+        ipos = scrape_bse_current()
+        if ipos:
+            logger.info(f"Got {len(ipos)} current IPOs from BSE India")
+            return ipos
+    except Exception as e:
+        logger.warning(f"BSE India failed: {e}")
+    
+    return ipos
+
+def scrape_all_upcoming():
+    """Scrape upcoming IPOs from all available sources"""
+    ipos = []
+    
+    # Try Chittorgarh first
+    try:
+        logger.info("Trying Chittorgarh for upcoming IPOs...")
+        ipos = scrape_chittorgarh_upcoming()
+        if ipos:
+            logger.info(f"Got {len(ipos)} upcoming IPOs from Chittorgarh")
+            return ipos
+    except Exception as e:
+        logger.warning(f"Chittorgarh failed: {e}")
+    
+    # Try Moneycontrol as fallback
+    try:
+        logger.info("Trying Moneycontrol for upcoming IPOs...")
+        ipos = scrape_moneycontrol_upcoming()
+        if ipos:
+            logger.info(f"Got {len(ipos)} upcoming IPOs from Moneycontrol")
+            return ipos
+    except Exception as e:
+        logger.warning(f"Moneycontrol failed: {e}")
+    
+    # Try BSE India as final fallback
+    try:
+        logger.info("Trying BSE India for upcoming IPOs...")
+        ipos = scrape_bse_upcoming()
+        if ipos:
+            logger.info(f"Got {len(ipos)} upcoming IPOs from BSE India")
+            return ipos
+    except Exception as e:
+        logger.warning(f"BSE India failed: {e}")
+    
+    return ipos
+
+# ==================== CHITTORGARH ====================
 def scrape_chittorgarh_current():
     """Scrape current/open IPOs from Chittorgarh"""
     url = "https://www.chittorgarh.com/ipo/ipo_calendar.asp"
@@ -107,13 +179,8 @@ def scrape_chittorgarh_current():
         soup = BeautifulSoup(response.text, 'html.parser')
         ipos = []
         
-        # Find all tables
         tables = soup.find_all('table')
-        logger.info(f"Found {len(tables)} tables in page")
-        
-        if not tables:
-            logger.warning("No tables found on the page")
-            return ipos
+        logger.info(f"Found {len(tables)} tables in Chittorgarh")
         
         for table_idx, table in enumerate(tables):
             try:
@@ -121,70 +188,47 @@ def scrape_chittorgarh_current():
                 if len(rows) < 2:
                     continue
                 
-                # Get table context
                 table_text = table.get_text().lower()
-                
-                # Skip if table doesn't have IPO-related keywords
-                if not any(keyword in table_text for keyword in ['ipo', 'company', 'price', 'date', 'open', 'close', 'current']):
+                if not any(keyword in table_text for keyword in ['ipo', 'company', 'price', 'date']):
                     continue
                 
-                logger.info(f"Processing table {table_idx}")
-                
-                # Process rows (skip header)
                 for row_idx, row in enumerate(rows[1:]):
-                    if row_idx >= 15:  # Max 15 IPOs
+                    if row_idx >= 15:
                         break
                     
                     cols = row.find_all(['td', 'th'])
-                    
                     if len(cols) >= 3:
                         try:
-                            # Extract data
-                            company = cols[0].get_text(strip=True) if len(cols) > 0 else ""
-                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
-                            open_date = cols[2].get_text(strip=True) if len(cols) > 2 else ""
-                            close_date = cols[3].get_text(strip=True) if len(cols) > 3 else ""
-                            lot_size = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                            company = cols[0].get_text(strip=True)
+                            price_text = cols[1].get_text(strip=True)
+                            open_date = cols[2].get_text(strip=True)
+                            close_date = cols[3].get_text(strip=True) if len(cols) > 3 else "TBA"
                             
-                            # Skip empty or header rows
-                            if not company or len(company) < 2 or company.lower() in ['company', 'name', 'symbol']:
+                            if not company or len(company) < 2 or company.lower() in ['company', 'name']:
                                 continue
                             
-                            # Parse price range
                             price_low, price_high = parse_price(price_text)
                             
-                            # Parse lot size
-                            lot = parse_lot_size(lot_size) if lot_size else 0
-                            
-                            # Only add if we have meaningful data
-                            if company and open_date:
-                                ipo = {
-                                    "company": company,
-                                    "priceLow": price_low,
-                                    "priceHigh": price_high,
-                                    "openDate": open_date,
-                                    "closeDate": close_date if close_date else "TBA",
-                                    "lotSize": lot,
-                                    "status": "open",
-                                    "exchange": "NSE+BSE",
-                                    "type": "Mainboard"
-                                }
-                                ipos.append(ipo)
-                                logger.info(f"Added current IPO: {company}")
-                        
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": open_date,
+                                "closeDate": close_date,
+                                "status": "open",
+                                "source": "chittorgarh"
+                            }
+                            ipos.append(ipo)
                         except Exception as e:
-                            logger.warning(f"Error parsing row {row_idx}: {e}")
+                            logger.warning(f"Error parsing row: {e}")
                             continue
-            
             except Exception as e:
-                logger.warning(f"Error processing table {table_idx}: {e}")
+                logger.warning(f"Error processing table: {e}")
                 continue
         
-        logger.info(f"Total current IPOs found: {len(ipos)}")
         return ipos
-    
     except Exception as e:
-        logger.error(f"Error scraping current IPOs: {str(e)}")
+        logger.error(f"Error scraping Chittorgarh current: {e}")
         raise
 
 def scrape_chittorgarh_upcoming():
@@ -199,13 +243,7 @@ def scrape_chittorgarh_upcoming():
         soup = BeautifulSoup(response.text, 'html.parser')
         ipos = []
         
-        # Find all tables
         tables = soup.find_all('table')
-        logger.info(f"Found {len(tables)} tables in page")
-        
-        if not tables:
-            logger.warning("No tables found on the page")
-            return ipos
         
         for table_idx, table in enumerate(tables):
             try:
@@ -213,68 +251,277 @@ def scrape_chittorgarh_upcoming():
                 if len(rows) < 2:
                     continue
                 
-                # Get table context
                 table_text = table.get_text().lower()
-                
-                # Skip if table doesn't have IPO-related keywords
-                if not any(keyword in table_text for keyword in ['ipo', 'company', 'price', 'date', 'upcoming', 'scheduled']):
+                if not any(keyword in table_text for keyword in ['ipo', 'company', 'upcoming']):
                     continue
                 
-                logger.info(f"Processing table {table_idx} for upcoming IPOs")
-                
-                # Process rows (skip header)
                 for row_idx, row in enumerate(rows[1:]):
-                    if row_idx >= 20:  # Max 20 upcoming
+                    if row_idx >= 20:
                         break
                     
                     cols = row.find_all(['td', 'th'])
-                    
                     if len(cols) >= 3:
                         try:
-                            # Extract data
-                            company = cols[0].get_text(strip=True) if len(cols) > 0 else ""
-                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
-                            open_date = cols[2].get_text(strip=True) if len(cols) > 2 else ""
-                            close_date = cols[3].get_text(strip=True) if len(cols) > 3 else ""
+                            company = cols[0].get_text(strip=True)
+                            price_text = cols[1].get_text(strip=True)
+                            open_date = cols[2].get_text(strip=True)
                             
-                            # Skip empty or header rows
-                            if not company or len(company) < 2 or company.lower() in ['company', 'name', 'symbol']:
+                            if not company or len(company) < 2:
                                 continue
                             
-                            # Parse price range
                             price_low, price_high = parse_price(price_text)
                             
-                            # Only add if we have meaningful data
-                            if company and open_date:
-                                ipo = {
-                                    "company": company,
-                                    "priceLow": price_low,
-                                    "priceHigh": price_high,
-                                    "openDate": open_date,
-                                    "closeDate": close_date if close_date else "TBA",
-                                    "lotSize": 0,
-                                    "status": "upcoming",
-                                    "exchange": "NSE+BSE",
-                                    "type": "Mainboard"
-                                }
-                                ipos.append(ipo)
-                                logger.info(f"Added upcoming IPO: {company}")
-                        
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": open_date,
+                                "status": "upcoming",
+                                "source": "chittorgarh"
+                            }
+                            ipos.append(ipo)
                         except Exception as e:
-                            logger.warning(f"Error parsing row {row_idx}: {e}")
+                            logger.warning(f"Error parsing row: {e}")
                             continue
-            
             except Exception as e:
-                logger.warning(f"Error processing table {table_idx}: {e}")
+                logger.warning(f"Error processing table: {e}")
                 continue
         
-        logger.info(f"Total upcoming IPOs found: {len(ipos)}")
         return ipos
-    
     except Exception as e:
-        logger.error(f"Error scraping upcoming IPOs: {str(e)}")
+        logger.error(f"Error scraping Chittorgarh upcoming: {e}")
         raise
 
+# ==================== MONEYCONTROL ====================
+def scrape_moneycontrol_current():
+    """Scrape current IPOs from Moneycontrol"""
+    url = "https://www.moneycontrol.com/ipo/"
+    
+    try:
+        session = get_session()
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        ipos = []
+        
+        # Look for tables with IPO data
+        tables = soup.find_all('table')
+        
+        for table in tables:
+            try:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                for row in rows[1:]:
+                    cols = row.find_all(['td', 'th'])
+                    if len(cols) >= 2:
+                        try:
+                            company = cols[0].get_text(strip=True)
+                            
+                            if not company or len(company) < 2:
+                                continue
+                            
+                            # Try to extract price and date from other columns
+                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            date_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            
+                            price_low, price_high = parse_price(price_text)
+                            
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": date_text,
+                                "status": "open",
+                                "source": "moneycontrol"
+                            }
+                            ipos.append(ipo)
+                        except Exception as e:
+                            logger.warning(f"Error parsing Moneycontrol row: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Error processing Moneycontrol table: {e}")
+                continue
+        
+        return ipos
+    except Exception as e:
+        logger.error(f"Error scraping Moneycontrol current: {e}")
+        raise
+
+def scrape_moneycontrol_upcoming():
+    """Scrape upcoming IPOs from Moneycontrol"""
+    url = "https://www.moneycontrol.com/ipo/"
+    
+    try:
+        session = get_session()
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        ipos = []
+        
+        # Similar logic as current, just filtering for upcoming
+        tables = soup.find_all('table')
+        
+        for table in tables:
+            try:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                table_text = table.get_text().lower()
+                if 'upcoming' not in table_text:
+                    continue
+                
+                for row in rows[1:]:
+                    cols = row.find_all(['td', 'th'])
+                    if len(cols) >= 2:
+                        try:
+                            company = cols[0].get_text(strip=True)
+                            
+                            if not company or len(company) < 2:
+                                continue
+                            
+                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            date_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            
+                            price_low, price_high = parse_price(price_text)
+                            
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": date_text,
+                                "status": "upcoming",
+                                "source": "moneycontrol"
+                            }
+                            ipos.append(ipo)
+                        except Exception as e:
+                            logger.warning(f"Error parsing Moneycontrol upcoming: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Error processing Moneycontrol table: {e}")
+                continue
+        
+        return ipos
+    except Exception as e:
+        logger.error(f"Error scraping Moneycontrol upcoming: {e}")
+        raise
+
+# ==================== BSE INDIA ====================
+def scrape_bse_current():
+    """Scrape current IPOs from BSE India"""
+    url = "https://www.bseindia.com/markets/issuers/newipos.aspx"
+    
+    try:
+        session = get_session()
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        ipos = []
+        
+        tables = soup.find_all('table')
+        
+        for table in tables:
+            try:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                for row in rows[1:]:
+                    cols = row.find_all(['td', 'th'])
+                    if len(cols) >= 2:
+                        try:
+                            company = cols[0].get_text(strip=True)
+                            
+                            if not company or len(company) < 2:
+                                continue
+                            
+                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            date_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            
+                            price_low, price_high = parse_price(price_text)
+                            
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": date_text,
+                                "status": "open",
+                                "source": "bseindia"
+                            }
+                            ipos.append(ipo)
+                        except Exception as e:
+                            logger.warning(f"Error parsing BSE row: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Error processing BSE table: {e}")
+                continue
+        
+        return ipos
+    except Exception as e:
+        logger.error(f"Error scraping BSE current: {e}")
+        raise
+
+def scrape_bse_upcoming():
+    """Scrape upcoming IPOs from BSE India"""
+    url = "https://www.bseindia.com/markets/issuers/newipos.aspx"
+    
+    try:
+        session = get_session()
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        ipos = []
+        
+        tables = soup.find_all('table')
+        
+        for table in tables:
+            try:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                for row in rows[1:]:
+                    cols = row.find_all(['td', 'th'])
+                    if len(cols) >= 2:
+                        try:
+                            company = cols[0].get_text(strip=True)
+                            
+                            if not company or len(company) < 2:
+                                continue
+                            
+                            price_text = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+                            date_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                            
+                            price_low, price_high = parse_price(price_text)
+                            
+                            ipo = {
+                                "company": company,
+                                "priceLow": price_low,
+                                "priceHigh": price_high,
+                                "openDate": date_text,
+                                "status": "upcoming",
+                                "source": "bseindia"
+                            }
+                            ipos.append(ipo)
+                        except Exception as e:
+                            logger.warning(f"Error parsing BSE upcoming: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Error processing BSE table: {e}")
+                continue
+        
+        return ipos
+    except Exception as e:
+        logger.error(f"Error scraping BSE upcoming: {e}")
+        raise
+
+# ==================== UTILITIES ====================
 def parse_price(price_text):
     """Parse price range from text"""
     try:
@@ -296,18 +543,6 @@ def parse_price(price_text):
     except Exception as e:
         logger.warning(f"Error parsing price '{price_text}': {e}")
         return 0, 0
-
-def parse_lot_size(lot_text):
-    """Parse lot size from text"""
-    try:
-        if not lot_text:
-            return 0
-        
-        lot_match = re.search(r'(\d+)', lot_text)
-        return int(lot_match.group(1)) if lot_match else 0
-    except Exception as e:
-        logger.warning(f"Error parsing lot size '{lot_text}': {e}")
-        return 0
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
